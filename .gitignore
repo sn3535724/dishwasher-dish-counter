@@ -1,0 +1,11 @@
+.venv/
+.venv_test/
+__pycache__/
+*.pyc
+history.db
+static/uploads/*
+static/results/*
+static/reports/*
+*.xlsx
+.idea/
+.vscode/
