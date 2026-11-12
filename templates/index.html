@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Подсчёт посуды в посудомоечной машине</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>Подсчёт посуды в посудомоечной машине</h1>
+            <p>Учебное веб-приложение на Flask и YOLOv8</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="card">
+            <h2>Загрузка изображения</h2>
+            <p>
+                Выберите фотографию открытой посудомоечной машины. Программа ищет
+                чашки, миски, бокалы, вилки, ножи и ложки.
+            </p>
+
+            <form id="uploadForm">
+                <label class="field">
+                    Изображение
+                    <input type="file" id="imageInput" name="image"
+                           accept=".jpg,.jpeg,.png,.webp" required>
+                </label>
+
+                <div class="settings">
+                    <label class="field">
+                        Режим обработки
+                        <select id="processMode">
+                            <option value="fast">Быстрый</option>
+                            <option value="standard" selected>Стандартный</option>
+                            <option value="accurate">Точный</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        Порог уверенности: <span id="confidenceValue">35%</span>
+                        <input type="range" id="confidenceRange"
+                               min="20" max="90" value="35">
+                    </label>
+                </div>
+
+                <button type="submit" class="button primary">Обработать изображение</button>
+                <a class="button link-button" href="/readme" target="_blank">Открыть README</a>
+            </form>
+        </section>
+
+        <section class="card">
+            <h2>Результат</h2>
+            <div id="resultPlaceholder" class="placeholder">
+                Здесь появится обработанное изображение.
+            </div>
+            <img id="resultImage" class="result-image" src="" alt="Результат обработки">
+
+            <div class="result-info">
+                <div>
+                    <span>Всего найдено</span>
+                    <strong id="dishCount">—</strong>
+                </div>
+                <div>
+                    <span>Средняя уверенность</span>
+                    <strong id="averageConfidence">—</strong>
+                </div>
+                <div>
+                    <span>Время обработки</span>
+                    <strong id="processingTime">—</strong>
+                </div>
+            </div>
+
+            <h3>Состав</h3>
+            <ul id="detailsList" class="details-list">
+                <li>Обработка ещё не выполнялась.</li>
+            </ul>
+            <p id="statusText" class="status">Ожидание изображения</p>
+        </section>
+
+        <section class="card history-card">
+            <div class="history-heading">
+                <div>
+                    <h2>История обработок</h2>
+                    <p>Последние результаты сохраняются в базе SQLite.</p>
+                </div>
+                <div class="actions">
+                    <button id="refreshHistoryButton" class="button" type="button">Обновить</button>
+                    <button id="exportExcelButton" class="button" type="button">Экспорт Excel</button>
+                    <button id="clearHistoryButton" class="button danger" type="button">Очистить</button>
+                </div>
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Дата</th>
+                            <th>Файл</th>
+                            <th>Всего</th>
+                            <th>Состав</th>
+                            <th>Уверенность</th>
+                            <th>Время</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyBody">
+                        <tr><td colspan="6">История пока пуста.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const uploadForm = document.getElementById("uploadForm");
+        const imageInput = document.getElementById("imageInput");
+        const processMode = document.getElementById("processMode");
+        const confidenceRange = document.getElementById("confidenceRange");
+        const confidenceValue = document.getElementById("confidenceValue");
+        const resultImage = document.getElementById("resultImage");
+        const resultPlaceholder = document.getElementById("resultPlaceholder");
+        const dishCount = document.getElementById("dishCount");
+        const averageConfidence = document.getElementById("averageConfidence");
+        const processingTime = document.getElementById("processingTime");
+        const detailsList = document.getElementById("detailsList");
+        const statusText = document.getElementById("statusText");
+        const historyBody = document.getElementById("historyBody");
+
+        confidenceRange.addEventListener("input", function () {
+            confidenceValue.textContent = confidenceRange.value + "%";
+        });
+
+        function escapeHtml(text) {
+            const element = document.createElement("div");
+            element.textContent = String(text);
+            return element.innerHTML;
+        }
+
+        function countsToText(counts) {
+            const items = Object.entries(counts);
+            if (items.length === 0) {
+                return "объекты не найдены";
+            }
+            return items.map(function (item) {
+                return item[0] + ": " + item[1];
+            }).join(", ");
+        }
+
+        function showDetails(counts) {
+            detailsList.innerHTML = "";
+            const items = Object.entries(counts);
+            if (items.length === 0) {
+                detailsList.innerHTML = "<li>Поддерживаемые объекты не найдены.</li>";
+                return;
+            }
+            items.forEach(function (itemData) {
+                const item = document.createElement("li");
+                item.textContent = itemData[0] + ": " + itemData[1];
+                detailsList.appendChild(item);
+            });
+        }
+
+        uploadForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            const file = imageInput.files[0];
+            if (!file) {
+                alert("Сначала выберите изображение.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("image", file);
+            formData.append("mode", processMode.value);
+            formData.append("confidence", confidenceRange.value);
+            statusText.textContent = "Выполняется обработка...";
+
+            try {
+                const response = await fetch("/process", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.error || "Ошибка обработки.");
+                }
+
+                resultImage.src = data.image_url + "?t=" + Date.now();
+                resultImage.style.display = "block";
+                resultPlaceholder.style.display = "none";
+                dishCount.textContent = data.count;
+                averageConfidence.textContent = data.average_confidence + "%";
+                processingTime.textContent = data.processing_time + " сек.";
+                showDetails(data.class_counts);
+                statusText.textContent = "Обработка завершена";
+                loadHistory();
+            } catch (error) {
+                alert(error.message);
+                statusText.textContent = "Произошла ошибка";
+            }
+        });
+
+        async function loadHistory() {
+            try {
+                const response = await fetch("/history");
+                const data = await response.json();
+                if (!data.success || data.records.length === 0) {
+                    historyBody.innerHTML = "<tr><td colspan='6'>История пока пуста.</td></tr>";
+                    return;
+                }
+
+                historyBody.innerHTML = "";
+                data.records.forEach(function (record) {
+                    const row = document.createElement("tr");
+                    row.innerHTML =
+                        "<td>" + escapeHtml(record.timestamp) + "</td>" +
+                        "<td><a href='" + record.result_url + "' target='_blank'>" +
+                        escapeHtml(record.original_filename) + "</a></td>" +
+                        "<td>" + record.dish_count + "</td>" +
+                        "<td>" + escapeHtml(countsToText(record.class_counts)) + "</td>" +
+                        "<td>" + record.average_confidence + "%</td>" +
+                        "<td>" + record.processing_time + " сек.</td>";
+                    historyBody.appendChild(row);
+                });
+            } catch (error) {
+                historyBody.innerHTML = "<tr><td colspan='6'>Не удалось загрузить историю.</td></tr>";
+            }
+        }
+
+        document.getElementById("refreshHistoryButton").addEventListener("click", loadHistory);
+        document.getElementById("exportExcelButton").addEventListener("click", function () {
+            window.location.href = "/export-excel";
+        });
+        document.getElementById("clearHistoryButton").addEventListener("click", async function () {
+            if (!confirm("Очистить всю историю?")) {
+                return;
+            }
+            await fetch("/clear-history", {method: "POST"});
+            loadHistory();
+        });
+
+        loadHistory();
+    </script>
+</body>
+</html>
